@@ -88,9 +88,15 @@ fi
 
 # Download docker-compose.yml from LinkAce repository
 $DOWNLOAD_CMD docker-compose.yml \
-    "https://raw.githubusercontent.com/linkace/linkace-docker/main/docker-compose.yml" 2>/dev/null || {
+    "https://raw.githubusercontent.com/Kovah/LinkAce/2.x/docker-compose.production.yml" 2>/dev/null || {
     log_warn "Could not download from official repo. Creating from template..."
 }
+
+# Verify the downloaded content is valid (not a 404 error)
+if [ -f docker-compose.yml ] && grep -q "404\|Not Found" docker-compose.yml 2>/dev/null; then
+    log_warn "Downloaded file contains error. Removing and creating from template..."
+    rm -f docker-compose.yml
+fi
 
 # If download failed, create docker-compose.yml
 if [ ! -f docker-compose.yml ]; then
@@ -100,7 +106,7 @@ version: '3.8'
 
 services:
   app:
-    image: linkace/linkace:${LINKACE_VERSION:-latest}
+    image: docker.io/linkace/linkace:latest
     container_name: linkace_app_1
     restart: unless-stopped
     depends_on:
@@ -109,12 +115,10 @@ services:
       redis:
         condition: service_healthy
     environment:
-      - APP_ENV=production
-      - LOG_CHANNEL=daily
+      - LINKACE_DOMAIN=${LINKACE_DOMAIN}
     volumes:
-      - ./docker/linkace/.env:/app/.env:ro
-      - ./docker/linkace/letsencrypt:/app/letsencrypt
-      - linkace-docker:/app/docker
+      - ./.env:/app/.env
+      - ./backups:/app/storage/app/backups
     networks:
       - linkace-network
     labels:
@@ -128,6 +132,9 @@ services:
       timeout: 10s
       retries: 3
       start_period: 60s
+    ports:
+      - "0.0.0.0:80:80"
+      #- "0.0.0.0:443:443"
 
   db:
     image: mysql:8.0
@@ -168,7 +175,6 @@ networks:
     driver: bridge
 
 volumes:
-  linkace-docker:
   linkace-mysql:
   linkace-redis:
 DOCKEREOF
@@ -178,14 +184,23 @@ fi
 log_info "Setting up environment configuration..."
 
 if [ ! -f .env ]; then
-    # Try to download .env.example from repository
-    $DOWNLOAD_CMD .env.example \
-        "https://raw.githubusercontent.com/linkace/linkace-docker/main/.env.example" 2>/dev/null || {
+    # Try to download .env file from repository
+    $DOWNLOAD_CMD .env \
+        "https://raw.githubusercontent.com/Kovah/LinkAce/2.x/.env.docker.production" 2>/dev/null || {
         log_info "Creating .env from template..."
     }
     
-    if [ -f .env.example ]; then
-        cp .env.example .env
+    # Verify the downloaded content is valid (not a 404 error)
+    if [ -f .env ] && grep -q "404\|Not Found" .env 2>/dev/null; then
+        log_warn "Downloaded file contains error. Removing and creating from template..."
+        rm -f .env
+    fi
+    
+    if [ -f .env ]; then
+        # Replace placeholder values with generated secure values
+        sed -i "s|DB_PASSWORD=.*|DB_PASSWORD=${DB_PASSWORD}|g" .env
+        sed -i "s|REDIS_PASSWORD=.*|REDIS_PASSWORD=${REDIS_PASSWORD}|g" .env
+        sed -i "s|LINKACE_DOMAIN=.*|LINKACE_DOMAIN=${LINKACE_DOMAIN}|g" .env
     else
         # Create .env file from scratch
         cat > .env << EOF
